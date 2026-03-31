@@ -46,6 +46,9 @@ class TurnGlobeValveEnv(BaseEnv):
         valve_yaw_noise: float = np.pi / 6,
         valve_init_qpos_noise: float = np.pi,
         success_threshold: float = np.pi,
+        success_dist_thresh: float = 0.05,
+        dist_score_threshold: float = 0.5,
+        success_hold_steps: int = 5,
         **kwargs,
     ):
         self.robot_init_qpos_noise = robot_init_qpos_noise
@@ -53,6 +56,9 @@ class TurnGlobeValveEnv(BaseEnv):
         self.valve_yaw_noise = valve_yaw_noise
         self.valve_init_qpos_noise = valve_init_qpos_noise
         self.success_threshold = float(success_threshold)
+        self.success_dist_thresh = success_dist_thresh
+        self.dist_score_threshold = dist_score_threshold
+        self.success_hold_steps = success_hold_steps
         super().__init__(*args, robot_uids=robot_uids, **kwargs)
 
     @property
@@ -99,6 +105,12 @@ class TurnGlobeValveEnv(BaseEnv):
 
         self._handwheel_qpos_prev = torch.zeros(self.num_envs, device=self.device)
         self._handwheel_cumulative = torch.zeros(self.num_envs, device=self.device)
+        self._success_counter = torch.zeros(
+            self.num_envs, dtype=torch.int32, device=self.device
+        )
+        self._success_latched = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=self.device
+        )
 
         # Make the joint easier to turn.
         for j in self.valve.active_joints:
@@ -139,6 +151,8 @@ class TurnGlobeValveEnv(BaseEnv):
 
             self._handwheel_qpos_prev[env_idx] = qpos0[:, 0]
             self._handwheel_cumulative[env_idx] = 0.0
+            self._success_counter[env_idx] = 0
+            self._success_latched[env_idx] = False
 
     def evaluate(self):
         # Unwrap delta angle to accumulate rotation beyond [-pi, pi].
@@ -149,7 +163,23 @@ class TurnGlobeValveEnv(BaseEnv):
         self._handwheel_qpos_prev = qpos
 
         valve_rotation = self._handwheel_cumulative
-        success = torch.abs(valve_rotation) > self.success_threshold
+        rotated_enough = torch.abs(valve_rotation) > self.success_threshold
+
+        tcp_xy = self.agent.tcp.pose.p[:, :2]
+        valve_xy = self.valve.pose.p[:, :2]
+        dist_xy = torch.linalg.norm(tcp_xy - valve_xy, dim=1)
+        dist_score = 1.0 - torch.clamp(dist_xy / self.success_dist_thresh, 0.0, 1.0)
+        near_enough = dist_score > self.dist_score_threshold
+
+        success_now = rotated_enough & near_enough
+
+        # Keep success stable by requiring consecutive successful frames.
+        self._success_counter = torch.where(
+            success_now, self._success_counter + 1, torch.zeros_like(self._success_counter)
+        )
+        success = self._success_counter >= self.success_hold_steps
+        self._success_latched = self._success_latched | success
+        success = self._success_latched
         return {
             "success": success,
             "valve_rotation": valve_rotation,
