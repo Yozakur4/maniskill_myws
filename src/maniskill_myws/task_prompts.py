@@ -5,7 +5,7 @@ from __future__ import annotations
 
 TASK_PROMPTS: dict[str, str] = {
     "TurnGlobeValve-v1": "turn the globe valve",
-    "OpenSafeDoor-v1": "open the safe door",
+    "OpenSafeDoor-v2": "press the button or turn the handle to unlock, then pull open the safe door",
     "StackCube-v2": "stack the red cube on the green cube",
     "BrushSolarPanel-v1": "use the brush to clean the solar panel",
     "OpenSafetyHook-v1": "open the safety hook and remove it from the rod",
