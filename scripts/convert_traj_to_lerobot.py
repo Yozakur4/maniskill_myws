@@ -250,8 +250,12 @@ def main() -> None:
         raise SystemExit("Please `pip install h5py` in your active conda env.") from e
 
     try:
-        from lerobot.common.datasets.lerobot_dataset import HF_LEROBOT_HOME
-        from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
+        try:
+            from lerobot.common.datasets.lerobot_dataset import HF_LEROBOT_HOME
+            from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
+        except ImportError:
+            from lerobot.datasets.lerobot_dataset import HF_LEROBOT_HOME
+            from lerobot.datasets.lerobot_dataset import LeRobotDataset
     except Exception as e:  # pragma: no cover
         raise SystemExit(
             "Please install LeRobot in your active conda env. "

@@ -47,6 +47,7 @@ class OpenSafeDoor2Env(BaseEnv):
     DOOR_JOINT_NAME = "joint_door"
     HANDLE_JOINT_NAME = "joint_bar"
     BUTTON_JOINT_NAME = "joint_button"
+    HANDLE_LINK_NAME = "bar_Link"  # child link of joint_bar in door.urdf
 
     def __init__(
         self,
@@ -251,7 +252,6 @@ class OpenSafeDoor2Env(BaseEnv):
     def _get_obs_extra(self, info: dict):
         obs = dict(
             tcp_pose=self.agent.tcp.pose.raw_pose,
-            handle_angle=info.get("handle_angle"),
             button_qpos=info.get("button_qpos"),
             door_open_amount=info.get("door_open_amount"),
             door_open_ratio=info.get("door_open_ratio"),
@@ -263,10 +263,38 @@ class OpenSafeDoor2Env(BaseEnv):
         return obs
 
     def compute_dense_reward(self, obs: Any, action: torch.Tensor, info: dict):
-        handle_reward = torch.clamp(info["handle_angle"] / 1.2, 0.0, 1.0)
-        button_reward = torch.clamp(info["button_qpos"] / 0.04, 0.0, 1.0)
-        door_reward = info.get("door_open_ratio", torch.zeros(self.num_envs, device=self.device))
-        return 0.3 * handle_reward + 0.3 * button_reward + 0.4 * door_reward
+        # --- stage 1: reach bar handle (TCP -> bar_Link) ---
+        bar_link = self.safe.links_map[self.HANDLE_LINK_NAME]
+        bar_pos = bar_link.pose.p  # (B, 3)
+        tcp_pos = self.agent.tcp.pose.p  # (B, 3)
+        dist = torch.linalg.norm(tcp_pos - bar_pos, dim=-1)  # (B,)
+        reach_reward = 1.0 - torch.tanh(5.0 * dist)
+
+        # --- stage 2: unlock (press bar down OR press button) ---
+        # joint_bar: 0 -> -1.5 (lower = more pressed)
+        bar_qpos = self.handle_joint.qpos.squeeze(-1)  # (B,)
+        bar_progress = torch.clamp((-bar_qpos) / 1.5, 0.0, 1.0)
+
+        # joint_button: 0.045 -> 0 (lower = more pressed)
+        button_qpos = info["button_qpos"].squeeze(-1)  # (B,)
+        button_progress = torch.clamp(1.0 - button_qpos / self.button_unpressed_pos, 0.0, 1.0)
+
+        unlock_reward = torch.max(bar_progress, button_progress)
+
+        # --- stage 3: open door (only rewarded after unlock) ---
+        door_reward = info["door_open_ratio"]  # (B,) clamped 0~1
+        released = info["door_released"].float()
+
+        reward = (
+            0.2 * reach_reward
+            + 0.4 * unlock_reward
+            + 0.4 * door_reward * released
+        )
+
+        # success bonus
+        reward = reward + 1.0 * info["success"].float()
+
+        return reward
 
     def compute_sparse_reward(self, obs: Any, action: torch.Tensor, info: dict):
         return info["success"].to(torch.float32)
