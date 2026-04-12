@@ -230,3 +230,15 @@ third_party/XLeVR/xlevr/inputs/vr_ws_server.py
 third_party/XLeVR/hdf5-trajectory/
 
 render_output/
+代码段
+# Claude Code configs and history
+.claude/
+
+# Robotic Datasets (Large files)
+datasets/
+data/
+*.h5
+*.hdf5
+
+# OpenPI specific (if needed)
+openpi_checkpoints/
